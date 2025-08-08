@@ -50,6 +50,8 @@ services:
       - {{ john_name }}_media:/usr/src/paperless/media
       - {{ john_name }}_export:/usr/src/paperless/export
       - {{ john_name }}_consume:/usr/src/paperless/consume
+    env_file:
+      - ./.env
     environment:
       PAPERLESS_REDIS: redis://broker:6379/0
       PAPERLESS_DBHOST: db
@@ -85,6 +87,8 @@ services:
       - {{ jane_name }}_media:/usr/src/paperless/media
       - {{ jane_name }}_export:/usr/src/paperless/export
       - {{ jane_name }}_consume:/usr/src/paperless/consume
+    env_file:
+      - ./.env
     environment:
       PAPERLESS_REDIS: redis://broker:6379/1
       PAPERLESS_DBHOST: db
