@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+      
+  broker:
+    image: docker.io/library/redis:8
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - redisdata:/data
+    
+
+  db:
+    image: docker.io/library/postgres:17
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - backend
+
+
+  paperless-{{ john_name }}:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+      - gotenberg
+      - tika
+    volumes:
+      - {{ john_name }}_data:/usr/src/paperless/data
+      - {{ john_name }}_media:/usr/src/paperless/media
+      - {{ john_name }}_export:/usr/src/paperless/export
+      - {{ john_name }}_consume:/usr/src/paperless/consume
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379/0
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBNAME: paperless_{{ john_name }}
+      PAPERLESS_DBUSER: {{ john_name }}_user
+      PAPERLESS_DBPASS: ${JOHN_DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${JOHN_SECRET_KEY}
+      PAPERLESS_URL: https://{{ john_name }}.{{ domain }}
+      PAPERLESS_ALLOWED_HOSTS: {{ john_name }}.{{ domain }}
+      PAPERLESS_CORS_ALLOWED_HOSTS: https://{{ john_name }}.{{ domain }}
+      PAPERLESS_CSRF_TRUSTED_ORIGINS: https://{{ john_name }}.{{ domain }}
+      PAPERLESS_TIME_ZONE: {{ timezone }}
+      PAPERLESS_OCR_LANGUAGE: {{ ocr_language }}
+      PAPERLESS_ADMIN_USER: {{ john_name }}
+      PAPERLESS_ADMIN_PASSWORD: admin
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+    networks:
+      - web
+      - backend
+
+  paperless-{{ jane_name }}:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+      - gotenberg
+      - tika
+    volumes:
+      - {{ jane_name }}_data:/usr/src/paperless/data
+      - {{ jane_name }}_media:/usr/src/paperless/media
+      - {{ jane_name }}_export:/usr/src/paperless/export
+      - {{ jane_name }}_consume:/usr/src/paperless/consume
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379/1
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBNAME: paperless_{{ jane_name }}
+      PAPERLESS_DBUSER: {{ jane_name }}_user
+      PAPERLESS_DBPASS: ${JANE_DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${JANE_SECRET_KEY}
+      PAPERLESS_URL: https://{{ jane_name }}.{{ domain }}
+      PAPERLESS_ALLOWED_HOSTS: {{ jane_name }}.{{ domain }}
+      PAPERLESS_CORS_ALLOWED_HOSTS: https://{{ jane_name }}.{{ domain }}
+      PAPERLESS_CSRF_TRUSTED_ORIGINS: https://{{ jane_name }}.{{ domain }}
+      PAPERLESS_TIME_ZONE: {{ timezone }}
+      PAPERLESS_OCR_LANGUAGE: {{ ocr_language }}
+      PAPERLESS_ADMIN_USER: {{ jane_name }}
+      PAPERLESS_ADMIN_PASSWORD: admin
+      PAPERLESS_TIKA_ENABLED: 1
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+    networks:
+      - web
+      - backend
+
+  gotenberg:
+    image: docker.io/gotenberg/gotenberg:8.20
+    restart: unless-stopped
+    # The gotenberg chromium route is used to convert .eml files. We do not
+    # want to allow external content like tracking pixels or even javascript.
+    command:
+      - "gotenberg"
+      - "--chromium-disable-javascript=true"
+      - "--chromium-allow-list=file:///tmp/.*"
+  tika:
+    image: docker.io/apache/tika:latest
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
+  redisdata:
+  {{ john_name }}_data:
+  {{ john_name }}_media:
+  {{ john_name }}_export:
+  {{ john_name }}_consume:
+  {{ jane_name }}_data:
+  {{ jane_name }}_media:
+  {{ jane_name }}_export:
+  {{ jane_name }}_consume:
+
+networks:
+  web:
+  backend:

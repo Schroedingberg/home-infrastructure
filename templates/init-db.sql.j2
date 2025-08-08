@@ -1,0 +1,15 @@
+CREATE DATABASE paperless_{{ john_name }};
+CREATE USER {{ john_name }}_user WITH PASSWORD '{{ john_db_password }}';
+GRANT ALL PRIVILEGES ON DATABASE paperless_{{ john_name }} TO {{ john_name }}_user;
+ALTER USER {{ john_name }}_user CREATEDB;
+
+CREATE DATABASE paperless_{{ jane_name }};
+CREATE USER {{ jane_name }}_user WITH PASSWORD '{{ jane_db_password }}';
+GRANT ALL PRIVILEGES ON DATABASE paperless_{{ jane_name }} TO {{ jane_name }}_user;
+ALTER USER {{ jane_name }}_user CREATEDB;
+
+\c paperless_{{ john_name }};
+GRANT ALL ON SCHEMA public TO {{ john_name }}_user;
+
+\c paperless_{{ jane_name }};
+GRANT ALL ON SCHEMA public TO {{ jane_name }}_user;

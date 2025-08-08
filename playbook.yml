@@ -1,0 +1,166 @@
+---
+# playbook.yml - Dual Paperless-ngx Setup with Ansible
+- name: Setup Dual Paperless-ngx Instances
+  hosts: paperless
+  become: true
+  vars:
+    paperless_user: paperless
+    domain: "{{ domain_name }}"
+    john_subdomain: "{{ john_name }}"
+    jane_subdomain: "{{ jane_name }}"
+    timezone: "Europe/Berlin"
+    ocr_language: "eng+deu"
+    
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - ufw
+          - fail2ban
+          - unattended-upgrades
+          - curl
+          - htop
+          - nano
+          - python3-pip
+        state: present
+
+
+    - name: Create paperless user
+      user:
+        name: "{{ paperless_user }}"
+        groups: docker
+        shell: /bin/bash
+        create_home: yes
+        append: yes
+
+    - name: Add paperless user to sudoers
+      lineinfile:
+        path: /etc/sudoers
+        line: "{{ paperless_user }} ALL=(ALL) NOPASSWD:ALL"
+        validate: 'visudo -cf %s'
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Configure UFW firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+      loop:
+        - "22"
+        - "80"
+        - "443"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+
+    - name: Enable and start fail2ban
+      systemd:
+        name: fail2ban
+        enabled: yes
+        state: started
+
+    - name: Configure unattended upgrades
+      debconf:
+        name: unattended-upgrades
+        question: unattended-upgrades/enable_auto_updates
+        value: 'true'
+        vtype: boolean
+
+    - name: Create paperless directory
+      file:
+        path: /home/{{ paperless_user }}/paperless
+        state: directory
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0755'
+
+    - name: Generate secrets if they don't exist
+      set_fact:
+        postgres_password: "{{ lookup('password', '/tmp/postgres_password chars=ascii_letters,digits length=16') }}"
+        john_secret: "{{ lookup('password', '/tmp/john_secret chars=ascii_letters,digits,punctuation length=32') }}"
+        jane_secret: "{{ lookup('password', '/tmp/jane_secret chars=ascii_letters,digits,punctuation length=32') }}"
+        john_db_password: "{{ lookup('password', '/tmp/john_db_password chars=ascii_letters,digits length=16') }}"
+        jane_db_password: "{{ lookup('password', '/tmp/jane_db_password chars=ascii_letters,digits length=16') }}"
+
+    - name: Create .env file
+      template:
+        src: templates/env.j2
+        dest: /home/{{ paperless_user }}/paperless/.env
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0600'
+
+    - name: Copy docker-compose.yml
+      template:
+        src: templates/docker-compose.yml.j2
+        dest: /home/{{ paperless_user }}/paperless/docker-compose.yml
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0644'
+
+    - name: Copy Caddyfile
+      template:
+        src: templates/Caddyfile.j2
+        dest: /home/{{ paperless_user }}/paperless/Caddyfile
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0644'
+
+    - name: Copy database init script
+      template:
+        src: templates/init-db.sql.j2
+        dest: /home/{{ paperless_user }}/paperless/init-db.sql
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0644'
+
+
+    - name: Copy utility scripts
+      copy:
+        content: |
+          #!/bin/bash
+          cd /home/{{ paperless_user }}/paperless
+          docker compose ps
+          echo ""
+          echo "=== System Resources ==="
+          df -h
+          echo ""
+          free -h
+          echo ""
+          echo "=== Recent Logs ==="
+          docker compose logs --tail=10
+        dest: /home/{{ paperless_user }}/paperless/status.sh
+        owner: "{{ paperless_user }}"
+        group: "{{ paperless_user }}"
+        mode: '0755'
+
+    - name: Start Paperless services
+      become: true
+      become_user: "{{ paperless_user }}"
+      community.docker.docker_compose_v2:
+        project_src: /home/{{ paperless_user }}/paperless
+        state: present
+        pull: always
+
+
+    - name: Display setup information
+      debug:
+        msg:
+          - "Setup complete!"
+          - "John's Paperless: https://{{ john_subdomain }}.{{ domain }}"
+          - "Jane's Paperless: https://{{ jane_subdomain }}.{{ domain }}"
+          - "Add these DNS records in Strato:"
+          - "A  {{ john_subdomain }}.{{ domain }}  {{ ansible_default_ipv4.address }}"
+          - "A  {{ jane_subdomain }}.{{ domain }}  {{ ansible_default_ipv4.address }}"
+          - "SSH: ssh {{ paperless_user }}@{{ ansible_default_ipv4.address }}"
