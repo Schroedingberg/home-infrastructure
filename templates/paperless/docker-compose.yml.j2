@@ -1,34 +1,34 @@
 # ansible/templates/paperless/docker-compose.yml.j2
-version: "3.4"
+
 services:
-  broker:
+  broker-{{ user.name }}:
     image: docker.io/library/redis:{{ redis.version }}
     restart: unless-stopped
     volumes:
-      - redisdata:/data
+      - redisdata-{{ user.name }}:/data
     networks:
-      - paperless-net
+      - paperless-net-{{ user.name }}
 
-  db:
+  db-{{ user.name }}:
     image: docker.io/library/postgres:17
     restart: unless-stopped
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata-{{ user.name }}:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: paperless
       POSTGRES_USER: paperless
       POSTGRES_PASSWORD: paperless
     networks:
-      - paperless-net
+      - paperless-net-{{ user.name }}
 
-  webserver:
+  webserver-{{ user.name }}:
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     restart: unless-stopped
     depends_on:
-      - db
-      - broker
-      - gotenberg
-      - tika
+      - db-{{ user.name }}
+      - broker-{{ user.name }}
+      - gotenberg-{{ user.name }}
+      - tika-{{ user.name }}
     ports:
       - "{{ user.port }}:8000"
     healthcheck:
@@ -43,16 +43,16 @@ services:
       - ./consume:/usr/src/paperless/consume
     env_file: .env
     environment:
-      PAPERLESS_REDIS: redis://broker:6379
-      PAPERLESS_DBHOST: db
+      PAPERLESS_REDIS: redis://broker-{{ user.name }}:6379
+      PAPERLESS_DBHOST: db-{{ user.name }}
       PAPERLESS_TIKA_ENABLED: 1
-      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg:3000
-      PAPERLESS_TIKA_ENDPOINT: http://tika:9998
+      PAPERLESS_TIKA_GOTENBERG_ENDPOINT: http://gotenberg-{{ user.name }}:3000
+      PAPERLESS_TIKA_ENDPOINT: http://tika-{{ user.name }}:9998
       PAPERLESS_URL: https://{{ user.subdomain }}.{{ domain }}
     networks:
-      - paperless-net
+      - paperless-net-{{ user.name }}
 
-  gotenberg:
+  gotenberg-{{ user.name }}:
     image: docker.io/gotenberg/gotenberg:latest
     restart: unless-stopped
     command:
@@ -60,17 +60,17 @@ services:
       - "--chromium-disable-javascript=true"
       - "--chromium-allow-list=file:///tmp/.*"
     networks:
-      - paperless-net
+      - paperless-net-{{ user.name }}
 
-  tika:
+  tika-{{ user.name }}:
     image: ghcr.io/paperless-ngx/tika:latest
     restart: unless-stopped
     networks:
-      - paperless-net
+      - paperless-net-{{ user.name }}
 
 volumes:
-  pgdata:
-  redisdata:
+  pgdata-{{ user.name }}:
+  redisdata-{{ user.name }}:
 
 networks:
-  paperless-net:
+  paperless-net-{{ user.name }}:
