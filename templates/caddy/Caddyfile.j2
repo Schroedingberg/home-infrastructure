@@ -1,0 +1,41 @@
+
+# Global options
+{
+    email {{ users[0].email }}
+    # Enable automatic HTTPS
+   
+}
+
+# User service proxies
+{% for user in users %}
+{{ user.subdomain }}.{{ domain }} {
+    reverse_proxy localhost:{{ user.port }}
+    
+    # Optional: Add security headers
+    header {
+        # Remove server info
+        -Server
+        
+        # Security headers
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    }
+    
+    # Optional: Enable compression
+    encode gzip
+    
+    # Log access
+    log {
+        output file /var/log/caddy/{{ user.subdomain }}.access.log
+        format json
+    }
+}
+
+{% endfor %}
+
+# Optional: Main domain redirect
+{{ domain }} {
+    respond "Paperless-ngx Multi-user Setup" 200
+}

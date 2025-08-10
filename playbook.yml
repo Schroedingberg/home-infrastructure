@@ -1,166 +1,210 @@
+# Directory structure:
+# ansible/
+# ├── playbook.yml
+# ├── inventory.yml
+# ├── group_vars/
+# │   └── all.yml
+# ├── templates/
+# │   ├── caddy/
+# │   │   └── Caddyfile.j2
+# │   └── paperless/
+# │       ├── docker-compose.yml.j2
+# │       └── .env.j2
+# └── files/
+#     └── (any static files if needed)
+
 ---
-# playbook.yml - Dual Paperless-ngx Setup with Ansible
-- name: Setup Dual Paperless-ngx Instances
-  hosts: paperless
+# ansible/playbook.yml
+- name: Deploy multi-user paperless-ngx setup
+  hosts: all
   become: true
   vars:
-    paperless_user: paperless
-    domain: "{{ domain_name }}"
-    john_subdomain: "{{ john_name }}"
-    jane_subdomain: "{{ jane_name }}"
-    timezone: "Europe/Berlin"
-    ocr_language: "eng+deu"
-    
+    caddy_config_dir: /etc/caddy
+    caddy_data_dir: /var/lib/caddy
+
   tasks:
-    - name: Update apt cache
+    - name: Update system packages
       apt:
         update_cache: true
-        cache_valid_time: 3600
+        upgrade: dist
 
     - name: Install required packages
       apt:
         name:
+          - jq
           - ufw
-          - fail2ban
-          - unattended-upgrades
-          - curl
-          - htop
-          - nano
           - python3-pip
         state: present
 
-
-    - name: Create paperless user
-      user:
-        name: "{{ paperless_user }}"
-        groups: docker
-        shell: /bin/bash
-        create_home: yes
-        append: yes
-
-    - name: Add paperless user to sudoers
-      lineinfile:
-        path: /etc/sudoers
-        line: "{{ paperless_user }} ALL=(ALL) NOPASSWD:ALL"
-        validate: 'visudo -cf %s'
-
-    - name: Enable and start Docker
+    - name: Start and enable Docker
       systemd:
         name: docker
-        enabled: yes
         state: started
+        enabled: true
+
+    - name: Create user accounts
+      user:
+        name: "{{ item.name }}"
+        shell: /bin/bash
+        create_home: true
+        groups: docker
+        append: true
+      loop: "{{ users }}"
+
+    - name: Create service directories for each user
+      file:
+        path: "/home/{{ item.name }}/{{ service_name }}"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0755'
+      loop: "{{ users }}"
+      vars:
+        service_name: paperless
+
+    - name: Create data directories for each user
+      file:
+        path: "/home/{{ item.name }}/{{ service_name }}/data"
+        state: directory
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0755'
+      loop: "{{ users }}"
+      vars:
+        service_name: paperless
+
+    - name: Generate docker-compose.yml for each user
+      template:
+        src: "{{ service_name }}/docker-compose.yml.j2"
+        dest: "/home/{{ item.name }}/{{ service_name }}/docker-compose.yml"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0644'
+      loop: "{{ users }}"
+      vars:
+        service_name: paperless
+        user: "{{ item }}"
+
+    - name: Generate .env file for each user
+      template:
+        src: "{{ service_name }}/.env.j2"
+        dest: "/home/{{ item.name }}/{{ service_name }}/.env"
+        owner: "{{ item.name }}"
+        group: "{{ item.name }}"
+        mode: '0600'
+      loop: "{{ users }}"
+      vars:
+        service_name: paperless
+        user: "{{ item }}"
+
+    - name: Install Caddy
+      get_url:
+        url: https://github.com/caddyserver/caddy/releases/download/v2.10.0/caddy_2.10.0_linux_amd64.tar.gz
+        dest: /tmp/caddy.tar.gz
+
+    - name: Extract Caddy
+      unarchive:
+        src: /tmp/caddy.tar.gz
+        dest: /usr/local/bin
+        remote_src: yes
+        creates: /usr/local/bin/caddy
+        mode: '0755'
+
+    - name: Create Caddy directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ caddy_config_dir }}"
+        - "{{ caddy_data_dir }}"
+
+    - name: Generate main Caddyfile
+      template:
+        src: caddy/Caddyfile.j2
+        dest: "{{ caddy_config_dir }}/Caddyfile"
+        mode: '0644'
+      notify: restart caddy
+
+    - name: Create Caddy systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Caddy
+          Documentation=https://caddyserver.com/docs/
+          After=network.target network-online.target
+          Requires=network-online.target
+
+          [Service]
+          Type=notify
+          User=caddy
+          Group=caddy
+          ExecStart=/usr/local/bin/caddy run --environ --config {{ caddy_config_dir }}/Caddyfile
+          ExecReload=/usr/local/bin/caddy reload --config {{ caddy_config_dir }}/Caddyfile --force
+          TimeoutStopSec=5s
+          LimitNOFILE=1048576
+          LimitNPROC=1048576
+          PrivateTmp=true
+          ProtectSystem=full
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/caddy.service
+        mode: '0644'
+      notify: 
+        - reload systemd
+        - restart caddy
+
+    - name: Create caddy user
+      user:
+        name: caddy
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/caddy
+        create_home: no
+
+    - name: Set Caddy data directory ownership
+      file:
+        path: "{{ caddy_data_dir }}"
+        owner: caddy
+        group: caddy
+        recurse: true
+
+    - name: Set Caddy log directory ownership
+      file:
+        path: "/var/log/caddy"
+        owner: caddy
+        group: caddy
+        recurse: true
 
     - name: Configure UFW firewall
       ufw:
         rule: allow
         port: "{{ item }}"
       loop:
-        - "22"
-        - "80"
-        - "443"
+        - '22'     # SSH
+        - '80'     # HTTP
+        - '443'    # HTTPS
 
     - name: Enable UFW
       ufw:
         state: enabled
-        policy: deny
 
-    - name: Enable and start fail2ban
-      systemd:
-        name: fail2ban
-        enabled: yes
-        state: started
-
-    - name: Configure unattended upgrades
-      debconf:
-        name: unattended-upgrades
-        question: unattended-upgrades/enable_auto_updates
-        value: 'true'
-        vtype: boolean
-
-    - name: Create paperless directory
-      file:
-        path: /home/{{ paperless_user }}/paperless
-        state: directory
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0755'
-
-    - name: Generate secrets if they don't exist
-      set_fact:
-        postgres_password: "{{ lookup('password', '/tmp/postgres_password chars=ascii_letters,digits length=16') }}"
-        john_secret: "{{ lookup('password', '/tmp/john_secret chars=ascii_letters,digits,punctuation length=32') }}"
-        jane_secret: "{{ lookup('password', '/tmp/jane_secret chars=ascii_letters,digits,punctuation length=32') }}"
-        john_db_password: "{{ lookup('password', '/tmp/john_db_password chars=ascii_letters,digits length=16') }}"
-        jane_db_password: "{{ lookup('password', '/tmp/jane_db_password chars=ascii_letters,digits length=16') }}"
-
-    - name: Create .env file
-      template:
-        src: templates/env.j2
-        dest: /home/{{ paperless_user }}/paperless/.env
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0600'
-
-    - name: Copy docker-compose.yml
-      template:
-        src: templates/docker-compose.yml.j2
-        dest: /home/{{ paperless_user }}/paperless/docker-compose.yml
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0644'
-
-    - name: Copy Caddyfile
-      template:
-        src: templates/Caddyfile.j2
-        dest: /home/{{ paperless_user }}/paperless/Caddyfile
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0644'
-
-    - name: Copy database init script
-      template:
-        src: templates/init-db.sql.j2
-        dest: /home/{{ paperless_user }}/paperless/init-db.sql
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0644'
-
-
-    - name: Copy utility scripts
-      copy:
-        content: |
-          #!/bin/bash
-          cd /home/{{ paperless_user }}/paperless
-          docker compose ps
-          echo ""
-          echo "=== System Resources ==="
-          df -h
-          echo ""
-          free -h
-          echo ""
-          echo "=== Recent Logs ==="
-          docker compose logs --tail=10
-        dest: /home/{{ paperless_user }}/paperless/status.sh
-        owner: "{{ paperless_user }}"
-        group: "{{ paperless_user }}"
-        mode: '0755'
-
-    - name: Start Paperless services
-      become: true
-      become_user: "{{ paperless_user }}"
+    - name: Start user services
       community.docker.docker_compose_v2:
-        project_src: /home/{{ paperless_user }}/paperless
+        project_src: "/home/{{ item.name }}/paperless"
         state: present
-        pull: always
+      become_user: "{{ item.name }}"
+      loop: "{{ users }}"
 
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
 
-    - name: Display setup information
-      debug:
-        msg:
-          - "Setup complete!"
-          - "John's Paperless: https://{{ john_subdomain }}.{{ domain }}"
-          - "Jane's Paperless: https://{{ jane_subdomain }}.{{ domain }}"
-          - "Add these DNS records in Strato:"
-          - "A  {{ john_subdomain }}.{{ domain }}  {{ ansible_default_ipv4.address }}"
-          - "A  {{ jane_subdomain }}.{{ domain }}  {{ ansible_default_ipv4.address }}"
-          - "SSH: ssh {{ paperless_user }}@{{ ansible_default_ipv4.address }}"
+    - name: restart caddy
+      systemd:
+        name: caddy
+        state: restarted
+        enabled: yes
